@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply text-brand-dark bg-white font-sans antialiased selection:bg-brand-accent selection:text-white;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-serif text-brand-dark tracking-tight;
+  }
+
+  /* Custom scrollbar to match minimalist aesthetics */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-brand-border rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-brand-muted;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-6 py-3 bg-brand-dark text-white font-sans text-sm font-medium hover:bg-brand-accent transition-colors duration-300;
+  }
+  .btn-secondary {
+    @apply px-6 py-3 bg-white text-brand-dark border border-brand-border font-sans text-sm font-medium hover:border-brand-dark transition-colors duration-300;
+  }
+  .btn-accent {
+    @apply px-6 py-3 bg-brand-accent text-white font-sans text-sm font-medium hover:bg-opacity-90 transition-colors duration-300;
+  }
+  .card {
+    @apply bg-white border border-brand-border p-8 hover:shadow-md transition-shadow duration-300;
+  }
+}
+
+@layer utilities {
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
