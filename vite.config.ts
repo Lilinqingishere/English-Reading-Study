@@ -5,7 +5,8 @@ import { traeBadgePlugin } from 'vite-plugin-trae-solo-badge';
 
 // https://vite.dev/config/
 export default defineConfig({
-  base: './', // 关键配置，解决 GitHub Pages 路径问题
+  // 这里必须改成你的仓库名，注意前后斜杠！
+  base: '/English-Reading-Study/',
   build: {
     sourcemap: 'hidden',
   },
