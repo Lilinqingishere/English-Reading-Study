@@ -5,19 +5,68 @@ import { Article, Vocabulary } from '../types';
 
 type AlignedLine = { english: string; chinese: string; isBreak?: boolean };
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+let translateChain: Promise<void> = Promise.resolve();
+let nextTranslateAt = 0;
+const TRANSLATE_MIN_GAP_MS = 700;
+const TRANSLATE_JITTER_MS = 250;
+const TRANSLATE_MAX_RETRIES = 3;
+
+async function enqueueTranslate<T>(fn: () => Promise<T>) {
+  const previous = translateChain;
+  let release: (() => void) | undefined;
+  translateChain = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await previous;
+
+  try {
+    const now = Date.now();
+    const waitMs = Math.max(0, nextTranslateAt - now);
+    if (waitMs > 0) await sleep(waitMs);
+
+    const jitter = Math.floor(Math.random() * TRANSLATE_JITTER_MS);
+    nextTranslateAt = Date.now() + TRANSLATE_MIN_GAP_MS + jitter;
+
+    return await fn();
+  } finally {
+    release?.();
+  }
+}
+
 async function translateChunk(chunk: string) {
   const url = new URL('https://api.mymemory.translated.net/get');
   url.searchParams.set('q', chunk);
   url.searchParams.set('langpair', 'en|zh-CN');
 
-  const res = await fetch(url.toString());
-  if (!res.ok) throw new Error(`Translate failed: ${res.status}`);
+  return enqueueTranslate(async () => {
+    let lastError: unknown = undefined;
+    for (let attempt = 0; attempt < TRANSLATE_MAX_RETRIES; attempt += 1) {
+      try {
+        const res = await fetch(url.toString());
+        if (!res.ok) {
+          if (res.status === 429 || res.status === 503) {
+            const backoff = 1200 * (attempt + 1);
+            await sleep(backoff);
+            continue;
+          }
+          throw new Error(`Translate failed: ${res.status}`);
+        }
 
-  const data: unknown = await res.json();
-  const translatedText = (data as any)?.responseData?.translatedText;
-  if (typeof translatedText !== 'string') throw new Error('Invalid translate response');
-
-  return translatedText;
+        const data: unknown = await res.json();
+        const translatedText = (data as any)?.responseData?.translatedText;
+        if (typeof translatedText !== 'string') throw new Error('Invalid translate response');
+        return translatedText;
+      } catch (e) {
+        lastError = e;
+        const backoff = 800 * (attempt + 1);
+        await sleep(backoff);
+      }
+    }
+    throw lastError ?? new Error('Translate failed');
+  });
 }
 
 function splitTextForAlignment(text: string) {
@@ -73,7 +122,7 @@ async function translateAlignedLines(lines: AlignedLine[]) {
   const targets = lines.filter((l) => !l.isBreak && l.english.trim().length > 0).map((l) => l.english);
   if (targets.length === 0) return lines;
 
-  const translated = await mapWithConcurrency(targets, 3, (s) => translateChunk(s));
+  const translated = await mapWithConcurrency(targets, 1, (s) => translateChunk(s));
 
   let cursor = 0;
   return lines.map((l) => {
