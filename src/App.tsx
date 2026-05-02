@@ -15,6 +15,7 @@ function App() {
           <Route path="analysis" element={<Analysis />} />
           <Route path="extension" element={<Extension />} />
           <Route path="review" element={<Review />} />
+          <Route path="profile" element={<Profile />} />
         </Route>
       </Routes>
     </BrowserRouter>
