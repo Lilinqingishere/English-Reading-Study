@@ -3,19 +3,296 @@ import { BookOpen, Search, Bookmark, ChevronRight, Check } from 'lucide-react';
 import { useStore } from '../store';
 import { Article, Vocabulary } from '../types';
 
-async function translateChunk(chunk: string) {
+type AlignedLine = { english: string; chinese: string; isBreak?: boolean };
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+let translateChain: Promise<void> = Promise.resolve();
+let nextTranslateAt = 0;
+const TRANSLATE_MIN_GAP_MS = 700;
+const TRANSLATE_JITTER_MS = 250;
+const TRANSLATE_MAX_RETRIES = 3;
+const ENABLE_MYMEMORY_FALLBACK = false;
+
+const TRANSLATION_CACHE_MAX = 200;
+const TRANSLATION_CACHE_KEY = 'era_translation_cache_v1';
+const translationCache = new Map<string, string>();
+let translationCacheOrder: string[] = [];
+
+function getCacheKey(source: string, target: string, text: string) {
+  return `${source}|${target}|${text}`;
+}
+
+function loadTranslationCache() {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.localStorage.getItem(TRANSLATION_CACHE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as { order: string[]; data: Record<string, string> };
+    if (!parsed || !Array.isArray(parsed.order) || typeof parsed.data !== 'object') return;
+    translationCacheOrder = parsed.order.slice(0, TRANSLATION_CACHE_MAX);
+    for (const k of translationCacheOrder) {
+      const v = parsed.data[k];
+      if (typeof v === 'string') translationCache.set(k, v);
+    }
+  } catch {
+    translationCache.clear();
+    translationCacheOrder = [];
+  }
+}
+
+function persistTranslationCache() {
+  if (typeof window === 'undefined') return;
+  try {
+    const data: Record<string, string> = {};
+    for (const k of translationCacheOrder) {
+      const v = translationCache.get(k);
+      if (typeof v === 'string') data[k] = v;
+    }
+    window.localStorage.setItem(TRANSLATION_CACHE_KEY, JSON.stringify({ order: translationCacheOrder, data }));
+  } catch {
+    return;
+  }
+}
+
+function getCachedTranslation(source: string, target: string, text: string) {
+  if (translationCache.size === 0) loadTranslationCache();
+  const key = getCacheKey(source, target, text);
+  return translationCache.get(key);
+}
+
+function setCachedTranslation(source: string, target: string, text: string, translated: string) {
+  if (translationCache.size === 0) loadTranslationCache();
+  const key = getCacheKey(source, target, text);
+  if (translationCache.has(key)) return;
+  translationCache.set(key, translated);
+  translationCacheOrder.push(key);
+  if (translationCacheOrder.length > TRANSLATION_CACHE_MAX) {
+    const removed = translationCacheOrder.shift();
+    if (removed) translationCache.delete(removed);
+  }
+  persistTranslationCache();
+}
+
+async function enqueueTranslate<T>(fn: () => Promise<T>) {
+  const previous = translateChain;
+  let release: (() => void) | undefined;
+  translateChain = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await previous;
+
+  try {
+    const now = Date.now();
+    const waitMs = Math.max(0, nextTranslateAt - now);
+    if (waitMs > 0) await sleep(waitMs);
+
+    const jitter = Math.floor(Math.random() * TRANSLATE_JITTER_MS);
+    nextTranslateAt = Date.now() + TRANSLATE_MIN_GAP_MS + jitter;
+
+    return await fn();
+  } finally {
+    release?.();
+  }
+}
+
+async function translateViaLibreTranslate(text: string, source: string, target: string, endpoint: string) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 12000);
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: text, source, target, format: 'text' }),
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`Translate failed: ${res.status}`);
+    const data: unknown = await res.json();
+    const translatedText = (data as any)?.translatedText;
+    if (typeof translatedText !== 'string') throw new Error('Invalid translate response');
+    return translatedText;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+async function translateViaMyMemory(text: string, source: string, target: string) {
   const url = new URL('https://api.mymemory.translated.net/get');
-  url.searchParams.set('q', chunk);
-  url.searchParams.set('langpair', 'en|zh-CN');
+  url.searchParams.set('q', text);
+  url.searchParams.set('langpair', `${source}|${target}`);
 
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error(`Translate failed: ${res.status}`);
-
   const data: unknown = await res.json();
   const translatedText = (data as any)?.responseData?.translatedText;
   if (typeof translatedText !== 'string') throw new Error('Invalid translate response');
-
   return translatedText;
+}
+
+async function translateText(text: string, source: string, target: string) {
+  const cached = getCachedTranslation(source, target, text);
+  if (typeof cached === 'string') return cached;
+
+  const libreEndpoints = [
+    'https://libretranslate.de/translate',
+    'https://translate.argosopentech.com/translate',
+  ];
+
+  let lastError: unknown = undefined;
+  for (const endpoint of libreEndpoints) {
+    try {
+      const translated = await translateViaLibreTranslate(text, source, target, endpoint);
+      setCachedTranslation(source, target, text, translated);
+      return translated;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  if (ENABLE_MYMEMORY_FALLBACK) {
+    try {
+      const translated = await translateViaMyMemory(text, source, target);
+      setCachedTranslation(source, target, text, translated);
+      return translated;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  throw lastError ?? new Error('Translate failed');
+}
+
+async function translateChunk(chunk: string) {
+  return enqueueTranslate(async () => {
+    let lastError: unknown = undefined;
+    for (let attempt = 0; attempt < TRANSLATE_MAX_RETRIES; attempt += 1) {
+      try {
+        return await translateText(chunk, 'en', 'zh');
+      } catch (e) {
+        lastError = e;
+        const backoff = 900 * (attempt + 1);
+        await sleep(backoff);
+      }
+    }
+    throw lastError ?? new Error('Translate failed');
+  });
+}
+
+function splitTextForAlignment(text: string) {
+  const normalized = text.replace(/\r\n/g, '\n').trim();
+  if (!normalized) return [] as AlignedLine[];
+
+  const paragraphs = normalized
+    .split(/\n\s*\n+/g)
+    .map((p) => p.replace(/\n+/g, ' ').trim())
+    .filter(Boolean);
+
+  const lines: AlignedLine[] = [];
+
+  for (let i = 0; i < paragraphs.length; i++) {
+    const p = paragraphs[i];
+    const matches = p.match(/[^.!?]+[.!?]+|[^.!?]+$/g);
+    const sentences = (matches ?? [p]).map((s) => s.trim()).filter(Boolean);
+
+    for (const s of sentences) {
+      lines.push({ english: s, chinese: '' });
+    }
+
+    if (i !== paragraphs.length - 1) {
+      lines.push({ english: '', chinese: '', isBreak: true });
+    }
+  }
+
+  return lines;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+) {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  const workers = new Array(Math.max(1, concurrency)).fill(0).map(async () => {
+    while (true) {
+      const current = nextIndex;
+      nextIndex += 1;
+      if (current >= items.length) return;
+      results[current] = await mapper(items[current], current);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
+async function translateAlignedLines(lines: AlignedLine[]) {
+  const targets = lines.filter((l) => !l.isBreak && l.english.trim().length > 0).map((l) => l.english);
+  if (targets.length === 0) return lines;
+
+  const DELIM = '\n<<<SPLIT>>>\n';
+  const groups: string[][] = [];
+  let current: string[] = [];
+  let currentLen = 0;
+
+  for (const s of targets) {
+    const addLen = (current.length ? DELIM.length : 0) + s.length;
+    if (current.length >= 5 || currentLen + addLen > 600) {
+      groups.push(current);
+      current = [s];
+      currentLen = s.length;
+      continue;
+    }
+    current.push(s);
+    currentLen += addLen;
+  }
+  if (current.length) groups.push(current);
+
+  const translated = await mapWithConcurrency(groups, 1, async (batch) => {
+    const joined = batch.join(DELIM);
+    try {
+      const translatedJoined = await translateChunk(joined);
+      const parts = translatedJoined.split(DELIM).map((x) => x.trim());
+      if (parts.length === batch.length) return parts;
+    } catch {
+      return [];
+    }
+    const fallback: string[] = [];
+    for (const s of batch) {
+      fallback.push(await translateChunk(s));
+    }
+    return fallback;
+  });
+
+  const flat = translated.flat();
+
+  let cursor = 0;
+  return lines.map((l) => {
+    if (l.isBreak) return l;
+    const next = flat[cursor] ?? '';
+    cursor += 1;
+    return { ...l, chinese: next };
+  });
+}
+
+function alignedLinesToText(lines: AlignedLine[], side: 'english' | 'chinese') {
+  const raw = lines
+    .map((l) => {
+      if (l.isBreak) return '';
+      return side === 'english' ? l.english : l.chinese;
+    })
+    .join('\n');
+
+  return raw.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function detectTitle(text: string) {
+  const firstLine = text.replace(/\r\n/g, '\n').split('\n').find((l) => l.trim().length > 0) ?? '';
+  const t = firstLine.trim();
+  if (!t) return 'Untitled';
+  return t.length > 50 ? `${t.substring(0, 50)}...` : t;
 }
 
 function splitIntoTranslateChunks(text: string, maxLen = 420) {
@@ -76,10 +353,58 @@ async function translateEnToZh(text: string) {
   return translatedChunks.join('\n\n');
 }
 
+function extractKeywords(text: string, limit: number) {
+  const tokens = text.match(/[A-Za-z][A-Za-z']+/g) ?? [];
+  const stopWords = new Set([
+    'the','a','an','and','or','but','if','then','else','when','while','where','who','whom','whose','which','what','why','how',
+    'is','am','are','was','were','be','been','being','do','does','did','doing','have','has','had','having',
+    'will','would','can','could','may','might','must','shall','should',
+    'of','to','in','on','at','for','from','with','without','as','by','about','into','over','after','before','between','through',
+    'this','that','these','those','it','its','they','them','their','we','our','you','your','he','him','his','she','her',
+    'not','no','yes','more','most','less','least','very','also','just','than','too','so',
+  ]);
+
+  const counts = new Map<string, number>();
+  for (const t of tokens) {
+    const w = t.toLowerCase();
+    if (w.length < 4) continue;
+    if (stopWords.has(w)) continue;
+    counts.set(w, (counts.get(w) ?? 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([word, count]) => ({ word, count }));
+}
+
+async function lookupDictionary(word: string) {
+  const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Dictionary failed: ${res.status}`);
+
+  const data: unknown = await res.json();
+  const entry = Array.isArray(data) ? data[0] : null;
+  const phonetic: string =
+    entry?.phonetic ||
+    (Array.isArray(entry?.phonetics)
+      ? entry.phonetics.find((p: any) => typeof p?.text === 'string')?.text
+      : '') ||
+    '';
+
+  const firstMeaning = Array.isArray(entry?.meanings) ? entry.meanings[0] : null;
+  const firstDef = Array.isArray(firstMeaning?.definitions) ? firstMeaning.definitions[0] : null;
+  const definition: string = typeof firstDef?.definition === 'string' ? firstDef.definition : '';
+  const example: string = typeof firstDef?.example === 'string' ? firstDef.example : '';
+
+  return { phonetic, definition, example };
+}
+
 export default function Analysis() {
   const [text, setText] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState<Article | null>(null);
+  const [alignedLines, setAlignedLines] = useState<AlignedLine[]>([]);
   const addArticle = useStore((state) => state.addArticle);
   const addVocabulary = useStore((state) => state.addVocabulary);
   const [saved, setSaved] = useState(false);
@@ -89,42 +414,75 @@ export default function Analysis() {
     if (!text.trim()) return;
     setIsAnalyzing(true);
     setSaved(false);
+    setAlignedLines([]);
 
     try {
-      const translatedContent = await translateEnToZh(text);
+      const baseLines = splitTextForAlignment(text);
+      const translatedLines = await translateAlignedLines(baseLines);
+      setAlignedLines(translatedLines);
+
+      const translatedContent = alignedLinesToText(translatedLines, 'chinese');
+      const keywords = extractKeywords(text, 6);
+      const now = Date.now();
+      const coreVocabs = await mapWithConcurrency(keywords, 3, async ({ word, count }, idx) => {
+        const id = `dict_${now}_${idx}_${word}`;
+        try {
+          const info = await lookupDictionary(word);
+          let translation = info.definition;
+          let exampleTranslation = '';
+          if (info.definition) {
+            try {
+              translation = await translateChunk(info.definition);
+            } catch {
+              translation = info.definition;
+            }
+          }
+          if (info.example) {
+            try {
+              exampleTranslation = await translateChunk(info.example);
+            } catch {
+              exampleTranslation = '';
+            }
+          }
+
+          const v: Vocabulary = {
+            id,
+            word,
+            phonetic: info.phonetic || '',
+            translation: translation || info.definition || '未查询到释义',
+            exampleSentence: info.example || '',
+            exampleTranslation,
+            frequency: count,
+            isCollected: false,
+            nextReviewDate: now,
+            reviewCount: 0,
+            addedAt: now,
+          };
+          return v;
+        } catch {
+          const v: Vocabulary = {
+            id,
+            word,
+            phonetic: '',
+            translation: '未查询到释义',
+            exampleSentence: '',
+            exampleTranslation: '',
+            frequency: count,
+            isCollected: false,
+            nextReviewDate: now,
+            reviewCount: 0,
+            addedAt: now,
+          };
+          return v;
+        }
+      });
+
       const mockResult: Article = {
         id: Date.now().toString(),
-        title: text.split('\n')[0].substring(0, 50) + '...',
+        title: detectTitle(text),
         content: text,
         translatedContent: translatedContent || '未获取到译文，请检查输入内容后重试。',
-        coreVocabs: [
-          {
-            id: `v_${Date.now()}_1`,
-            word: 'Analysis',
-            phonetic: '/əˈnælɪsɪs/',
-            translation: 'n. 分析；分解；验定',
-            exampleSentence: 'The careful analysis of the results is very important.',
-            exampleTranslation: '仔细分析结果是非常重要的。',
-            frequency: 15,
-            isCollected: false,
-            nextReviewDate: Date.now(),
-            reviewCount: 0,
-            addedAt: Date.now()
-          } as Vocabulary,
-          {
-            id: `v_${Date.now()}_2`,
-            word: 'Significant',
-            phonetic: '/sɪɡˈnɪfɪkənt/',
-            translation: 'adj. 重要的；有意义的',
-            exampleSentence: 'There is a significant difference between the two.',
-            exampleTranslation: '两者之间存在显著差异。',
-            frequency: 28,
-            isCollected: false,
-            nextReviewDate: Date.now(),
-            reviewCount: 0,
-            addedAt: Date.now()
-          } as Vocabulary
-        ],
+        coreVocabs,
         longSentences: [
           {
             id: `s_${Date.now()}_1`,
@@ -140,7 +498,7 @@ export default function Analysis() {
     } catch (e) {
       const fallbackResult: Article = {
         id: Date.now().toString(),
-        title: text.split('\n')[0].substring(0, 50) + '...',
+        title: detectTitle(text),
         content: text,
         translatedContent: '翻译失败，请稍后重试。',
         coreVocabs: [],
@@ -204,7 +562,10 @@ export default function Analysis() {
         <div className="flex flex-col gap-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
           <div className="flex justify-between items-center border-b border-brand-border pb-4">
             <button 
-              onClick={() => setResult(null)}
+              onClick={() => {
+                setResult(null);
+                setAlignedLines([]);
+              }}
               className="text-sm text-brand-muted hover:text-brand-dark flex items-center gap-1 transition-colors"
             >
               <ChevronRight className="w-4 h-4 rotate-180" />
@@ -224,19 +585,52 @@ export default function Analysis() {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <div className="space-y-4">
-              <h2 className="text-sm font-sans tracking-widest text-brand-muted uppercase">原文 Original</h2>
-              <div className="prose prose-sm font-serif text-brand-dark leading-relaxed whitespace-pre-wrap">
-                {result.content}
+          <div className="space-y-6">
+            <div className="flex items-end justify-between gap-6 border-b border-brand-border pb-4">
+              <h2 className="text-2xl font-serif">中英对照全文</h2>
+              <div className="text-xs font-sans tracking-widest text-brand-muted uppercase">
+                Sentence-aligned
               </div>
             </div>
-            <div className="space-y-4">
-              <h2 className="text-sm font-sans tracking-widest text-brand-muted uppercase">译文 Translation</h2>
-              <div className="prose prose-sm font-sans text-brand-muted leading-relaxed whitespace-pre-wrap">
-                {result.translatedContent}
+
+            {alignedLines.length > 0 ? (
+              <div className="border border-brand-border bg-white">
+                {alignedLines.map((line, idx) => {
+                  if (line.isBreak) {
+                    return <div key={`b_${idx}`} className="h-6 bg-brand-light" />;
+                  }
+
+                  return (
+                    <div
+                      key={`l_${idx}`}
+                      className="grid grid-cols-1 md:grid-cols-2 gap-4 px-5 py-4 border-b border-brand-border last:border-b-0"
+                    >
+                      <div className="font-serif text-brand-dark leading-relaxed">
+                        {line.english}
+                      </div>
+                      <div className="font-sans text-brand-muted leading-relaxed">
+                        {line.chinese || '...'}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-4">
+                  <h2 className="text-sm font-sans tracking-widest text-brand-muted uppercase">原文 Original</h2>
+                  <div className="prose prose-sm font-serif text-brand-dark leading-relaxed whitespace-pre-wrap">
+                    {result.content}
+                  </div>
+                </div>
+                <div className="space-y-4">
+                  <h2 className="text-sm font-sans tracking-widest text-brand-muted uppercase">译文 Translation</h2>
+                  <div className="prose prose-sm font-sans text-brand-muted leading-relaxed whitespace-pre-wrap">
+                    {result.translatedContent}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="space-y-6">
@@ -264,7 +658,7 @@ export default function Analysis() {
                     <p className="font-sans opacity-80">{vocab.exampleTranslation}</p>
                   </div>
                   <div className="mt-auto pt-4 flex items-center justify-between text-xs text-brand-muted font-sans border-t border-brand-border">
-                    <span>历年考频</span>
+                    <span>文中出现</span>
                     <span className="font-bold text-brand-dark">{vocab.frequency} 次</span>
                   </div>
                 </div>
