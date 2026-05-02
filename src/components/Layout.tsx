@@ -8,7 +8,6 @@ const NAV_ITEMS = [
   { path: '/analysis', label: '阅读分析', icon: BookOpen },
   { path: '/extension', label: '阅读拓展', icon: BookText },
   { path: '/review', label: '词汇复习', icon: BrainCircuit },
-  { path: '/profile', label: '我的', icon: User },
 ];
 
 export default function Layout() {
