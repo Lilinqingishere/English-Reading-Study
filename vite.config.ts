@@ -5,28 +5,24 @@ import { traeBadgePlugin } from 'vite-plugin-trae-solo-badge';
 
 // https://vite.dev/config/
 export default defineConfig({
-  // 这里必须改成你的仓库名，注意前后斜杠！
   base: '/English-Reading-Study/',
-  build: {
-    sourcemap: 'hidden',
-  },
   plugins: [
     react({
       babel: {
         plugins: [
           'react-dev-locator',
-        ],
-      },
+        ]
+      }
     }),
     traeBadgePlugin({
       variant: 'dark',
       position: 'bottom-right',
-      prodOnly: true,
+      proDonly: true,
       clickable: true,
       clickUrl: 'https://www.trae.ai/solo?showJoin=1',
       autoTheme: true,
       autoThemeTarget: '#root'
     }),
     tsconfigPaths()
-  ],
+  ]
 })
