@@ -3,6 +3,79 @@ import { BookOpen, Search, Bookmark, ChevronRight, Check } from 'lucide-react';
 import { useStore } from '../store';
 import { Article, Vocabulary } from '../types';
 
+async function translateChunk(chunk: string) {
+  const url = new URL('https://api.mymemory.translated.net/get');
+  url.searchParams.set('q', chunk);
+  url.searchParams.set('langpair', 'en|zh-CN');
+
+  const res = await fetch(url.toString());
+  if (!res.ok) throw new Error(`Translate failed: ${res.status}`);
+
+  const data: unknown = await res.json();
+  const translatedText = (data as any)?.responseData?.translatedText;
+  if (typeof translatedText !== 'string') throw new Error('Invalid translate response');
+
+  return translatedText;
+}
+
+function splitIntoTranslateChunks(text: string, maxLen = 420) {
+  const normalized = text.replace(/\r\n/g, '\n').trim();
+  if (!normalized) return [];
+
+  const paragraphs = normalized.split(/\n\s*\n+/g).map((p) => p.trim()).filter(Boolean);
+  const chunks: string[] = [];
+
+  const flush = (buf: string[]) => {
+    if (buf.length === 0) return;
+    const combined = buf.join('\n\n').trim();
+    if (combined) chunks.push(combined);
+    buf.length = 0;
+  };
+
+  const splitLong = (input: string) => {
+    const sentences = input.split(/(?<=[.!?])\s+/g);
+    if (sentences.length === 1) {
+      const pieces: string[] = [];
+      for (let i = 0; i < input.length; i += maxLen) pieces.push(input.slice(i, i + maxLen));
+      return pieces;
+    }
+    return sentences;
+  };
+
+  const buf: string[] = [];
+  let currentLen = 0;
+
+  for (const p of paragraphs) {
+    const parts = p.length > maxLen ? splitLong(p) : [p];
+    for (const part of parts) {
+      const candidateLen = currentLen + (buf.length ? 2 : 0) + part.length;
+      if (candidateLen > maxLen) {
+        flush(buf);
+        buf.push(part);
+        currentLen = part.length;
+      } else {
+        buf.push(part);
+        currentLen = candidateLen;
+      }
+    }
+  }
+
+  flush(buf);
+  return chunks;
+}
+
+async function translateEnToZh(text: string) {
+  const chunks = splitIntoTranslateChunks(text);
+  if (chunks.length === 0) return '';
+
+  const translatedChunks: string[] = [];
+  for (const chunk of chunks) {
+    translatedChunks.push(await translateChunk(chunk));
+  }
+
+  return translatedChunks.join('\n\n');
+}
+
 export default function Analysis() {
   const [text, setText] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -16,20 +89,14 @@ export default function Analysis() {
     if (!text.trim()) return;
     setIsAnalyzing(true);
     setSaved(false);
-    
-    try {
-      // 调用免费 MyMemory 翻译 API，en|zh 表示英文→中文
-      const response = await fetch(
-        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|zh`
-      );
-      const data = await response.json();
-      const translatedContent = data.responseData.translatedText || '翻译失败，请稍后重试';
 
+    try {
+      const translatedContent = await translateEnToZh(text);
       const mockResult: Article = {
         id: Date.now().toString(),
         title: text.split('\n')[0].substring(0, 50) + '...',
         content: text,
-        translatedContent: translatedContent, // 改成真实翻译结果
+        translatedContent: translatedContent || '未获取到译文，请检查输入内容后重试。',
         coreVocabs: [
           {
             id: `v_${Date.now()}_1`,
@@ -43,7 +110,7 @@ export default function Analysis() {
             nextReviewDate: Date.now(),
             reviewCount: 0,
             addedAt: Date.now()
-          },
+          } as Vocabulary,
           {
             id: `v_${Date.now()}_2`,
             word: 'Significant',
@@ -56,7 +123,7 @@ export default function Analysis() {
             nextReviewDate: Date.now(),
             reviewCount: 0,
             addedAt: Date.now()
-          }
+          } as Vocabulary
         ],
         longSentences: [
           {
@@ -70,19 +137,18 @@ export default function Analysis() {
         addedAt: Date.now()
       };
       setResult(mockResult);
-    } catch (error) {
-      // 如果翻译失败，回退为提示信息
-      const mockResult: Article = {
+    } catch (e) {
+      const fallbackResult: Article = {
         id: Date.now().toString(),
         title: text.split('\n')[0].substring(0, 50) + '...',
         content: text,
-        translatedContent: '翻译服务暂时不可用，请稍后再试',
-        coreVocabs: [], // 至少不显示假词汇
+        translatedContent: '翻译失败，请稍后重试。',
+        coreVocabs: [],
         longSentences: [],
         isCollected: false,
         addedAt: Date.now()
       };
-      setResult(mockResult);
+      setResult(fallbackResult);
     } finally {
       setIsAnalyzing(false);
     }
@@ -124,7 +190,7 @@ export default function Analysis() {
               className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isAnalyzing ? (
-                <span className="animate-pulse">翻译中...</span>
+                <span className="animate-pulse">Analyzing...</span>
               ) : (
                 <>
                   <Search className="w-4 h-4" />
@@ -173,58 +239,54 @@ export default function Analysis() {
             </div>
           </div>
 
-          {result.coreVocabs.length > 0 && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-serif border-b border-brand-border pb-4">核心词汇 Core Vocabulary</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {result.coreVocabs.map((vocab) => (
-                  <div key={vocab.id} className="card p-6 flex flex-col gap-4">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <h3 className="text-xl font-serif font-bold text-brand-accent">{vocab.word}</h3>
-                        <span className="text-sm text-brand-muted font-sans">{vocab.phonetic}</span>
-                      </div>
-                      <button 
-                        onClick={() => handleSaveWord(vocab)}
-                        disabled={savedWords.has(vocab.id)}
-                        className="text-brand-muted hover:text-brand-accent transition-colors"
-                        title="加入生词本"
-                      >
-                        {savedWords.has(vocab.id) ? <Check className="w-5 h-5 text-green-600" /> : <Bookmark className="w-5 h-5" />}
-                      </button>
+          <div className="space-y-6">
+            <h2 className="text-2xl font-serif border-b border-brand-border pb-4">核心词汇 Core Vocabulary</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {result.coreVocabs.map((vocab) => (
+                <div key={vocab.id} className="card p-6 flex flex-col gap-4">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h3 className="text-xl font-serif font-bold text-brand-accent">{vocab.word}</h3>
+                      <span className="text-sm text-brand-muted font-sans">{vocab.phonetic}</span>
                     </div>
-                    <p className="font-sans text-brand-dark font-medium">{vocab.translation}</p>
-                    <div className="text-sm text-brand-muted font-serif border-l-2 border-brand-border pl-3">
-                      <p className="mb-1">{vocab.exampleSentence}</p>
-                      <p className="font-sans opacity-80">{vocab.exampleTranslation}</p>
-                    </div>
-                    <div className="mt-auto pt-4 flex items-center justify-between text-xs text-brand-muted font-sans border-t border-brand-border">
-                      <span>历年考频</span>
-                      <span className="font-bold text-brand-dark">{vocab.frequency} 次</span>
-                    </div>
+                    <button 
+                      onClick={() => handleSaveWord(vocab)}
+                      disabled={savedWords.has(vocab.id)}
+                      className="text-brand-muted hover:text-brand-accent transition-colors"
+                      title="加入生词本"
+                    >
+                      {savedWords.has(vocab.id) ? <Check className="w-5 h-5 text-green-600" /> : <Bookmark className="w-5 h-5" />}
+                    </button>
                   </div>
-                ))}
-              </div>
+                  <p className="font-sans text-brand-dark font-medium">{vocab.translation}</p>
+                  <div className="text-sm text-brand-muted font-serif border-l-2 border-brand-border pl-3">
+                    <p className="mb-1">{vocab.exampleSentence}</p>
+                    <p className="font-sans opacity-80">{vocab.exampleTranslation}</p>
+                  </div>
+                  <div className="mt-auto pt-4 flex items-center justify-between text-xs text-brand-muted font-sans border-t border-brand-border">
+                    <span>历年考频</span>
+                    <span className="font-bold text-brand-dark">{vocab.frequency} 次</span>
+                  </div>
+                </div>
+              ))}
             </div>
-          )}
+          </div>
 
-          {result.longSentences.length > 0 && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-serif border-b border-brand-border pb-4">长难句解析 Long Sentences</h2>
-              <div className="flex flex-col gap-6">
-                {result.longSentences.map((sentence) => (
-                  <div key={sentence.id} className="bg-brand-light p-6 md:p-8">
-                    <p className="font-serif text-lg leading-relaxed text-brand-dark mb-4">{sentence.english}</p>
-                    <p className="font-sans text-brand-muted mb-6">{sentence.chinese}</p>
-                    <div className="bg-white p-4 border border-brand-border text-sm font-sans text-brand-dark leading-relaxed">
-                      <span className="font-bold text-brand-accent mr-2">结构分析:</span>
-                      {sentence.analysis}
-                    </div>
+          <div className="space-y-6">
+            <h2 className="text-2xl font-serif border-b border-brand-border pb-4">长难句解析 Long Sentences</h2>
+            <div className="flex flex-col gap-6">
+              {result.longSentences.map((sentence) => (
+                <div key={sentence.id} className="bg-brand-light p-6 md:p-8">
+                  <p className="font-serif text-lg leading-relaxed text-brand-dark mb-4">{sentence.english}</p>
+                  <p className="font-sans text-brand-muted mb-6">{sentence.chinese}</p>
+                  <div className="bg-white p-4 border border-brand-border text-sm font-sans text-brand-dark leading-relaxed">
+                    <span className="font-bold text-brand-accent mr-2">结构分析:</span>
+                    {sentence.analysis}
                   </div>
-                ))}
-              </div>
+                </div>
+              ))}
             </div>
-          )}
+          </div>
         </div>
       )}
     </div>
