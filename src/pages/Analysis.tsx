@@ -21,7 +21,7 @@ If their designers had had the tools to think with their bodies – like dancers
 Observing the choreographer Wayne McGregor, cognitive scientist David Kirsh described how he 'thinks with the body'. Kirsh argues that by using the body to simulate outcomes, McGregor is able to imagine solutions that would not be possible using purely abstract thought. This kind of physical knowledge is valued in many areas of expertise, but currently has no place in formal engineering design processes. A suggested method for transport engineers is to improvise design solutions and get instant feedback about how they would work from their own experience of them, or model designs at full scale in the way choreographers experiment with groups of dancers. Above all, perhaps, they might learn to design for emotional as well as functional effects.`,
   translatedContent: `城市工程师能从舞蹈中汲取灵感吗？
   
-  我们在城市中的出行方式对城市的可持续性有着重大影响。据估计，在世界上大多数发达国家，交通运输约占能源消耗的 30%...（完整翻译已省略以节省空间，实际使用时请保留你之前提供的完整译文）`,
+  我们在城市中的出行方式对城市的可持续性有着重大影响。据估计，在世界上大多数发达国家，交通运输约占能源消耗的 30%...（请补全你提供的完整译文）`,
   coreVocabs: [
     { id: 'f1', word: 'radical', phonetic: '/ˈrædɪkl/', translation: 'adj. 彻底的；激进的；根本性的', exampleSentence: 'We need radical changes.', exampleTranslation: '我们需要彻底的变革。' },
     { id: 'f2', word: 'detach', phonetic: '/dɪˈtætʃ/', translation: 'v. 使分离；脱离', exampleSentence: 'Building designs detach the designer from reality.', exampleTranslation: '建筑设计使设计师脱离现实。' },
@@ -34,7 +34,7 @@ Observing the choreographer Wayne McGregor, cognitive scientist David Kirsh desc
   ]
 };
 
-// ============ 内置通用词库（可随时扩充） ============
+// ============ 内置通用词库（修复重复 key：development 已去重） ============
 const BUILT_IN_DICT: Record<string, { phonetic: string; translation: string }> = {
   'sustainable': { phonetic: '/səˈsteɪnəbl/', translation: 'adj. 可持续的' },
   'transportation': { phonetic: '/ˌtrænspərˈteɪʃn/', translation: 'n. 运输；交通' },
@@ -88,7 +88,6 @@ const BUILT_IN_DICT: Record<string, { phonetic: string; translation: string }> =
   'complexity': { phonetic: '/kəmˈpleksəti/', translation: 'n. 复杂性' },
   'simplify': { phonetic: '/ˈsɪmplɪfaɪ/', translation: 'v. 简化' },
   'illustrate': { phonetic: '/ˈɪləstreɪt/', translation: 'v. 举例说明；阐明' },
-  'development': { phonetic: '/dɪˈveləpmənt/', translation: 'n. 发展；开发' },
   'modernist': { phonetic: '/ˈmɒdənɪst/', translation: 'adj. 现代主义的' },
   'approach': { phonetic: '/əˈprəʊtʃ/', translation: 'n. 方法；途径；v. 接近' },
   'prevalent': { phonetic: '/ˈprevələnt/', translation: 'adj. 流行的；盛行的' },
