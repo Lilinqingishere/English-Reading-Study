@@ -3,6 +3,8 @@ import { BookOpen, Search, Bookmark, ChevronRight, Check } from 'lucide-react';
 import { useStore } from '../store';
 import { Article, Vocabulary } from '../types';
 
+type AlignedLine = { english: string; chinese: string; isBreak?: boolean };
+
 async function translateChunk(chunk: string) {
   const url = new URL('https://api.mymemory.translated.net/get');
   url.searchParams.set('q', chunk);
@@ -16,6 +18,88 @@ async function translateChunk(chunk: string) {
   if (typeof translatedText !== 'string') throw new Error('Invalid translate response');
 
   return translatedText;
+}
+
+function splitTextForAlignment(text: string) {
+  const normalized = text.replace(/\r\n/g, '\n').trim();
+  if (!normalized) return [] as AlignedLine[];
+
+  const paragraphs = normalized
+    .split(/\n\s*\n+/g)
+    .map((p) => p.replace(/\n+/g, ' ').trim())
+    .filter(Boolean);
+
+  const lines: AlignedLine[] = [];
+
+  for (let i = 0; i < paragraphs.length; i++) {
+    const p = paragraphs[i];
+    const matches = p.match(/[^.!?]+[.!?]+|[^.!?]+$/g);
+    const sentences = (matches ?? [p]).map((s) => s.trim()).filter(Boolean);
+
+    for (const s of sentences) {
+      lines.push({ english: s, chinese: '' });
+    }
+
+    if (i !== paragraphs.length - 1) {
+      lines.push({ english: '', chinese: '', isBreak: true });
+    }
+  }
+
+  return lines;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+) {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  const workers = new Array(Math.max(1, concurrency)).fill(0).map(async () => {
+    while (true) {
+      const current = nextIndex;
+      nextIndex += 1;
+      if (current >= items.length) return;
+      results[current] = await mapper(items[current], current);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
+async function translateAlignedLines(lines: AlignedLine[]) {
+  const targets = lines.filter((l) => !l.isBreak && l.english.trim().length > 0).map((l) => l.english);
+  if (targets.length === 0) return lines;
+
+  const translated = await mapWithConcurrency(targets, 3, (s) => translateChunk(s));
+
+  let cursor = 0;
+  return lines.map((l) => {
+    if (l.isBreak) return l;
+    const next = translated[cursor] ?? '';
+    cursor += 1;
+    return { ...l, chinese: next };
+  });
+}
+
+function alignedLinesToText(lines: AlignedLine[], side: 'english' | 'chinese') {
+  const raw = lines
+    .map((l) => {
+      if (l.isBreak) return '';
+      return side === 'english' ? l.english : l.chinese;
+    })
+    .join('\n');
+
+  return raw.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function detectTitle(text: string) {
+  const firstLine = text.replace(/\r\n/g, '\n').split('\n').find((l) => l.trim().length > 0) ?? '';
+  const t = firstLine.trim();
+  if (!t) return 'Untitled';
+  return t.length > 50 ? `${t.substring(0, 50)}...` : t;
 }
 
 function splitIntoTranslateChunks(text: string, maxLen = 420) {
@@ -80,6 +164,7 @@ export default function Analysis() {
   const [text, setText] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState<Article | null>(null);
+  const [alignedLines, setAlignedLines] = useState<AlignedLine[]>([]);
   const addArticle = useStore((state) => state.addArticle);
   const addVocabulary = useStore((state) => state.addVocabulary);
   const [saved, setSaved] = useState(false);
@@ -89,12 +174,17 @@ export default function Analysis() {
     if (!text.trim()) return;
     setIsAnalyzing(true);
     setSaved(false);
+    setAlignedLines([]);
 
     try {
-      const translatedContent = await translateEnToZh(text);
+      const baseLines = splitTextForAlignment(text);
+      const translatedLines = await translateAlignedLines(baseLines);
+      setAlignedLines(translatedLines);
+
+      const translatedContent = alignedLinesToText(translatedLines, 'chinese');
       const mockResult: Article = {
         id: Date.now().toString(),
-        title: text.split('\n')[0].substring(0, 50) + '...',
+        title: detectTitle(text),
         content: text,
         translatedContent: translatedContent || '未获取到译文，请检查输入内容后重试。',
         coreVocabs: [
@@ -140,7 +230,7 @@ export default function Analysis() {
     } catch (e) {
       const fallbackResult: Article = {
         id: Date.now().toString(),
-        title: text.split('\n')[0].substring(0, 50) + '...',
+        title: detectTitle(text),
         content: text,
         translatedContent: '翻译失败，请稍后重试。',
         coreVocabs: [],
@@ -204,7 +294,10 @@ export default function Analysis() {
         <div className="flex flex-col gap-12 animate-in fade-in slide-in-from-bottom-4 duration-700">
           <div className="flex justify-between items-center border-b border-brand-border pb-4">
             <button 
-              onClick={() => setResult(null)}
+              onClick={() => {
+                setResult(null);
+                setAlignedLines([]);
+              }}
               className="text-sm text-brand-muted hover:text-brand-dark flex items-center gap-1 transition-colors"
             >
               <ChevronRight className="w-4 h-4 rotate-180" />
@@ -224,19 +317,52 @@ export default function Analysis() {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <div className="space-y-4">
-              <h2 className="text-sm font-sans tracking-widest text-brand-muted uppercase">原文 Original</h2>
-              <div className="prose prose-sm font-serif text-brand-dark leading-relaxed whitespace-pre-wrap">
-                {result.content}
+          <div className="space-y-6">
+            <div className="flex items-end justify-between gap-6 border-b border-brand-border pb-4">
+              <h2 className="text-2xl font-serif">中英对照全文</h2>
+              <div className="text-xs font-sans tracking-widest text-brand-muted uppercase">
+                Sentence-aligned
               </div>
             </div>
-            <div className="space-y-4">
-              <h2 className="text-sm font-sans tracking-widest text-brand-muted uppercase">译文 Translation</h2>
-              <div className="prose prose-sm font-sans text-brand-muted leading-relaxed whitespace-pre-wrap">
-                {result.translatedContent}
+
+            {alignedLines.length > 0 ? (
+              <div className="border border-brand-border bg-white">
+                {alignedLines.map((line, idx) => {
+                  if (line.isBreak) {
+                    return <div key={`b_${idx}`} className="h-6 bg-brand-light" />;
+                  }
+
+                  return (
+                    <div
+                      key={`l_${idx}`}
+                      className="grid grid-cols-1 md:grid-cols-2 gap-4 px-5 py-4 border-b border-brand-border last:border-b-0"
+                    >
+                      <div className="font-serif text-brand-dark leading-relaxed">
+                        {line.english}
+                      </div>
+                      <div className="font-sans text-brand-muted leading-relaxed">
+                        {line.chinese || '...'}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="space-y-4">
+                  <h2 className="text-sm font-sans tracking-widest text-brand-muted uppercase">原文 Original</h2>
+                  <div className="prose prose-sm font-serif text-brand-dark leading-relaxed whitespace-pre-wrap">
+                    {result.content}
+                  </div>
+                </div>
+                <div className="space-y-4">
+                  <h2 className="text-sm font-sans tracking-widest text-brand-muted uppercase">译文 Translation</h2>
+                  <div className="prose prose-sm font-sans text-brand-muted leading-relaxed whitespace-pre-wrap">
+                    {result.translatedContent}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="space-y-6">
