@@ -160,6 +160,53 @@ async function translateEnToZh(text: string) {
   return translatedChunks.join('\n\n');
 }
 
+function extractKeywords(text: string, limit: number) {
+  const tokens = text.match(/[A-Za-z][A-Za-z']+/g) ?? [];
+  const stopWords = new Set([
+    'the','a','an','and','or','but','if','then','else','when','while','where','who','whom','whose','which','what','why','how',
+    'is','am','are','was','were','be','been','being','do','does','did','doing','have','has','had','having',
+    'will','would','can','could','may','might','must','shall','should',
+    'of','to','in','on','at','for','from','with','without','as','by','about','into','over','after','before','between','through',
+    'this','that','these','those','it','its','they','them','their','we','our','you','your','he','him','his','she','her',
+    'not','no','yes','more','most','less','least','very','also','just','than','too','so',
+  ]);
+
+  const counts = new Map<string, number>();
+  for (const t of tokens) {
+    const w = t.toLowerCase();
+    if (w.length < 4) continue;
+    if (stopWords.has(w)) continue;
+    counts.set(w, (counts.get(w) ?? 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([word, count]) => ({ word, count }));
+}
+
+async function lookupDictionary(word: string) {
+  const url = `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Dictionary failed: ${res.status}`);
+
+  const data: unknown = await res.json();
+  const entry = Array.isArray(data) ? data[0] : null;
+  const phonetic: string =
+    entry?.phonetic ||
+    (Array.isArray(entry?.phonetics)
+      ? entry.phonetics.find((p: any) => typeof p?.text === 'string')?.text
+      : '') ||
+    '';
+
+  const firstMeaning = Array.isArray(entry?.meanings) ? entry.meanings[0] : null;
+  const firstDef = Array.isArray(firstMeaning?.definitions) ? firstMeaning.definitions[0] : null;
+  const definition: string = typeof firstDef?.definition === 'string' ? firstDef.definition : '';
+  const example: string = typeof firstDef?.example === 'string' ? firstDef.example : '';
+
+  return { phonetic, definition, example };
+}
+
 export default function Analysis() {
   const [text, setText] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -182,39 +229,67 @@ export default function Analysis() {
       setAlignedLines(translatedLines);
 
       const translatedContent = alignedLinesToText(translatedLines, 'chinese');
+      const keywords = extractKeywords(text, 6);
+      const now = Date.now();
+      const coreVocabs = await mapWithConcurrency(keywords, 3, async ({ word, count }, idx) => {
+        const id = `dict_${now}_${idx}_${word}`;
+        try {
+          const info = await lookupDictionary(word);
+          let translation = info.definition;
+          let exampleTranslation = '';
+          if (info.definition) {
+            try {
+              translation = await translateChunk(info.definition);
+            } catch {
+              translation = info.definition;
+            }
+          }
+          if (info.example) {
+            try {
+              exampleTranslation = await translateChunk(info.example);
+            } catch {
+              exampleTranslation = '';
+            }
+          }
+
+          const v: Vocabulary = {
+            id,
+            word,
+            phonetic: info.phonetic || '',
+            translation: translation || info.definition || '未查询到释义',
+            exampleSentence: info.example || '',
+            exampleTranslation,
+            frequency: count,
+            isCollected: false,
+            nextReviewDate: now,
+            reviewCount: 0,
+            addedAt: now,
+          };
+          return v;
+        } catch {
+          const v: Vocabulary = {
+            id,
+            word,
+            phonetic: '',
+            translation: '未查询到释义',
+            exampleSentence: '',
+            exampleTranslation: '',
+            frequency: count,
+            isCollected: false,
+            nextReviewDate: now,
+            reviewCount: 0,
+            addedAt: now,
+          };
+          return v;
+        }
+      });
+
       const mockResult: Article = {
         id: Date.now().toString(),
         title: detectTitle(text),
         content: text,
         translatedContent: translatedContent || '未获取到译文，请检查输入内容后重试。',
-        coreVocabs: [
-          {
-            id: `v_${Date.now()}_1`,
-            word: 'Analysis',
-            phonetic: '/əˈnælɪsɪs/',
-            translation: 'n. 分析；分解；验定',
-            exampleSentence: 'The careful analysis of the results is very important.',
-            exampleTranslation: '仔细分析结果是非常重要的。',
-            frequency: 15,
-            isCollected: false,
-            nextReviewDate: Date.now(),
-            reviewCount: 0,
-            addedAt: Date.now()
-          } as Vocabulary,
-          {
-            id: `v_${Date.now()}_2`,
-            word: 'Significant',
-            phonetic: '/sɪɡˈnɪfɪkənt/',
-            translation: 'adj. 重要的；有意义的',
-            exampleSentence: 'There is a significant difference between the two.',
-            exampleTranslation: '两者之间存在显著差异。',
-            frequency: 28,
-            isCollected: false,
-            nextReviewDate: Date.now(),
-            reviewCount: 0,
-            addedAt: Date.now()
-          } as Vocabulary
-        ],
+        coreVocabs,
         longSentences: [
           {
             id: `s_${Date.now()}_1`,
@@ -390,7 +465,7 @@ export default function Analysis() {
                     <p className="font-sans opacity-80">{vocab.exampleTranslation}</p>
                   </div>
                   <div className="mt-auto pt-4 flex items-center justify-between text-xs text-brand-muted font-sans border-t border-brand-border">
-                    <span>历年考频</span>
+                    <span>文中出现</span>
                     <span className="font-bold text-brand-dark">{vocab.frequency} 次</span>
                   </div>
                 </div>
