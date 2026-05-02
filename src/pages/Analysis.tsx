@@ -12,18 +12,24 @@ export default function Analysis() {
   const [saved, setSaved] = useState(false);
   const [savedWords, setSavedWords] = useState<Set<string>>(new Set());
 
-  const handleAnalyze = () => {
+  const handleAnalyze = async () => {
     if (!text.trim()) return;
     setIsAnalyzing(true);
     setSaved(false);
     
-    // Mock API call
-    setTimeout(() => {
+    try {
+      // 调用免费 MyMemory 翻译 API，en|zh 表示英文→中文
+      const response = await fetch(
+        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|zh`
+      );
+      const data = await response.json();
+      const translatedContent = data.responseData.translatedText || '翻译失败，请稍后重试';
+
       const mockResult: Article = {
         id: Date.now().toString(),
         title: text.split('\n')[0].substring(0, 50) + '...',
         content: text,
-        translatedContent: '这是一段系统自动生成的翻译文本。通常这里会显示对输入英文原文的逐句或逐段中文翻译。',
+        translatedContent: translatedContent, // 改成真实翻译结果
         coreVocabs: [
           {
             id: `v_${Date.now()}_1`,
@@ -64,8 +70,22 @@ export default function Analysis() {
         addedAt: Date.now()
       };
       setResult(mockResult);
+    } catch (error) {
+      // 如果翻译失败，回退为提示信息
+      const mockResult: Article = {
+        id: Date.now().toString(),
+        title: text.split('\n')[0].substring(0, 50) + '...',
+        content: text,
+        translatedContent: '翻译服务暂时不可用，请稍后再试',
+        coreVocabs: [], // 至少不显示假词汇
+        longSentences: [],
+        isCollected: false,
+        addedAt: Date.now()
+      };
+      setResult(mockResult);
+    } finally {
       setIsAnalyzing(false);
-    }, 1500);
+    }
   };
 
   const handleSaveArticle = () => {
@@ -104,7 +124,7 @@ export default function Analysis() {
               className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isAnalyzing ? (
-                <span className="animate-pulse">Analyzing...</span>
+                <span className="animate-pulse">翻译中...</span>
               ) : (
                 <>
                   <Search className="w-4 h-4" />
@@ -153,54 +173,58 @@ export default function Analysis() {
             </div>
           </div>
 
-          <div className="space-y-6">
-            <h2 className="text-2xl font-serif border-b border-brand-border pb-4">核心词汇 Core Vocabulary</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {result.coreVocabs.map((vocab) => (
-                <div key={vocab.id} className="card p-6 flex flex-col gap-4">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h3 className="text-xl font-serif font-bold text-brand-accent">{vocab.word}</h3>
-                      <span className="text-sm text-brand-muted font-sans">{vocab.phonetic}</span>
+          {result.coreVocabs.length > 0 && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-serif border-b border-brand-border pb-4">核心词汇 Core Vocabulary</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {result.coreVocabs.map((vocab) => (
+                  <div key={vocab.id} className="card p-6 flex flex-col gap-4">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h3 className="text-xl font-serif font-bold text-brand-accent">{vocab.word}</h3>
+                        <span className="text-sm text-brand-muted font-sans">{vocab.phonetic}</span>
+                      </div>
+                      <button 
+                        onClick={() => handleSaveWord(vocab)}
+                        disabled={savedWords.has(vocab.id)}
+                        className="text-brand-muted hover:text-brand-accent transition-colors"
+                        title="加入生词本"
+                      >
+                        {savedWords.has(vocab.id) ? <Check className="w-5 h-5 text-green-600" /> : <Bookmark className="w-5 h-5" />}
+                      </button>
                     </div>
-                    <button 
-                      onClick={() => handleSaveWord(vocab)}
-                      disabled={savedWords.has(vocab.id)}
-                      className="text-brand-muted hover:text-brand-accent transition-colors"
-                      title="加入生词本"
-                    >
-                      {savedWords.has(vocab.id) ? <Check className="w-5 h-5 text-green-600" /> : <Bookmark className="w-5 h-5" />}
-                    </button>
+                    <p className="font-sans text-brand-dark font-medium">{vocab.translation}</p>
+                    <div className="text-sm text-brand-muted font-serif border-l-2 border-brand-border pl-3">
+                      <p className="mb-1">{vocab.exampleSentence}</p>
+                      <p className="font-sans opacity-80">{vocab.exampleTranslation}</p>
+                    </div>
+                    <div className="mt-auto pt-4 flex items-center justify-between text-xs text-brand-muted font-sans border-t border-brand-border">
+                      <span>历年考频</span>
+                      <span className="font-bold text-brand-dark">{vocab.frequency} 次</span>
+                    </div>
                   </div>
-                  <p className="font-sans text-brand-dark font-medium">{vocab.translation}</p>
-                  <div className="text-sm text-brand-muted font-serif border-l-2 border-brand-border pl-3">
-                    <p className="mb-1">{vocab.exampleSentence}</p>
-                    <p className="font-sans opacity-80">{vocab.exampleTranslation}</p>
-                  </div>
-                  <div className="mt-auto pt-4 flex items-center justify-between text-xs text-brand-muted font-sans border-t border-brand-border">
-                    <span>历年考频</span>
-                    <span className="font-bold text-brand-dark">{vocab.frequency} 次</span>
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
-          <div className="space-y-6">
-            <h2 className="text-2xl font-serif border-b border-brand-border pb-4">长难句解析 Long Sentences</h2>
-            <div className="flex flex-col gap-6">
-              {result.longSentences.map((sentence) => (
-                <div key={sentence.id} className="bg-brand-light p-6 md:p-8">
-                  <p className="font-serif text-lg leading-relaxed text-brand-dark mb-4">{sentence.english}</p>
-                  <p className="font-sans text-brand-muted mb-6">{sentence.chinese}</p>
-                  <div className="bg-white p-4 border border-brand-border text-sm font-sans text-brand-dark leading-relaxed">
-                    <span className="font-bold text-brand-accent mr-2">结构分析:</span>
-                    {sentence.analysis}
+          {result.longSentences.length > 0 && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-serif border-b border-brand-border pb-4">长难句解析 Long Sentences</h2>
+              <div className="flex flex-col gap-6">
+                {result.longSentences.map((sentence) => (
+                  <div key={sentence.id} className="bg-brand-light p-6 md:p-8">
+                    <p className="font-serif text-lg leading-relaxed text-brand-dark mb-4">{sentence.english}</p>
+                    <p className="font-sans text-brand-muted mb-6">{sentence.chinese}</p>
+                    <div className="bg-white p-4 border border-brand-border text-sm font-sans text-brand-dark leading-relaxed">
+                      <span className="font-bold text-brand-accent mr-2">结构分析:</span>
+                      {sentence.analysis}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>
