@@ -4,7 +4,6 @@ import Home from './pages/Home';
 import Analysis from './pages/Analysis';
 import Extension from './pages/Extension';
 import Review from './pages/Review';
-import Profile from './pages/Profile';
 
 function App() {
   return (
