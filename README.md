@@ -1,57 +1,29 @@
-# React + TypeScript + Vite
+# English Reading Academy
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+> 专为四六级与雅思备考者打造的极简英语阅读分析平台
 
-Currently, two official plugins are available:
+## 🌐 在线访问
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+**[https://lilingqingishere.github.io/English-Reading-Study/](https://lilingqingishere.github.io/English-Reading-Study/)**
 
-## Expanding the ESLint configuration
+## ✨ 功能介绍
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+- **阅读分析**：输入英文段落，获取中英对照、核心词汇解析、长难句拆解
+- **阅读拓展**：精选外刊文章，涵盖科技、环境、社会等多个领域
+- **词汇复习**：生词本功能，基于艾宾浩斯记忆曲线设计
 
-```js
-export default tseslint.config({
-  extends: [
-    // Remove ...tseslint.configs.recommended and replace with this
-    ...tseslint.configs.recommendedTypeChecked,
-    // Alternatively, use this for stricter rules
-    ...tseslint.configs.strictTypeChecked,
-    // Optionally, add this for stylistic rules
-    ...tseslint.configs.stylisticTypeChecked,
-  ],
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
-```
+## 🛠 技术栈
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+- **前端框架**：React + TypeScript
+- **构建工具**：Vite
+- **样式方案**：Tailwind CSS
+- **状态管理**：Zustand
+- **部署**：GitHub Pages + GitHub Actions
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## 🚀 本地运行
 
-export default tseslint.config({
-  extends: [
-    // other configs...
-    // Enable lint rules for React
-    reactX.configs['recommended-typescript'],
-    // Enable lint rules for React DOM
-    reactDom.configs.recommended,
-  ],
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
-```
+```bash
+git clone https://github.com/lilingqingishere/English-Reading-Study.git
+cd English-Reading-Study
+npm install
+npm run dev
