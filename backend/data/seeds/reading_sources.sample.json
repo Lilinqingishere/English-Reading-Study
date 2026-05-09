@@ -1,0 +1,32 @@
+[
+  {
+    "sourceName": "Project Gutenberg",
+    "sourceUrl": "https://www.gutenberg.org/ebooks/1342",
+    "title": "Pride and Prejudice",
+    "author": "Jane Austen",
+    "targetDifficulty": "IELTS",
+    "topic": "Classic Literature",
+    "licenseNote": "Public domain in the United States; verify local reuse requirements before distribution.",
+    "attributionText": "Source: Project Gutenberg, Pride and Prejudice by Jane Austen."
+  },
+  {
+    "sourceName": "Project Gutenberg",
+    "sourceUrl": "https://www.gutenberg.org/ebooks/11",
+    "title": "Alice's Adventures in Wonderland",
+    "author": "Lewis Carroll",
+    "targetDifficulty": "CET6",
+    "topic": "Classic Literature",
+    "licenseNote": "Public domain in the United States; verify local reuse requirements before distribution.",
+    "attributionText": "Source: Project Gutenberg, Alice's Adventures in Wonderland by Lewis Carroll."
+  },
+  {
+    "sourceName": "Project Gutenberg",
+    "sourceUrl": "https://www.gutenberg.org/ebooks/84",
+    "title": "Frankenstein; Or, The Modern Prometheus",
+    "author": "Mary Wollstonecraft Shelley",
+    "targetDifficulty": "IELTS",
+    "topic": "Classic Literature",
+    "licenseNote": "Public domain in the United States; verify local reuse requirements before distribution.",
+    "attributionText": "Source: Project Gutenberg, Frankenstein; Or, The Modern Prometheus by Mary Wollstonecraft Shelley."
+  }
+]
