@@ -4,7 +4,7 @@
 
 ## 🌐 在线访问
 
-**[https://Lilinqingishere.github.io/English-Reading-Study/](https://Lilinqingishere.github.io/English-Reading-Study/)**
+**(http://120.55.96.7/English-Reading-Study/analysis)/)**
 
 ## ✨ 功能介绍
 
